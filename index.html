@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Digify CX Internal</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Serif+Display&display=swap" rel="stylesheet">
+<style>
+  /* Same styles as before - keeping it short */
+  body { font-family: 'DM Sans', sans-serif; background: #d4edda; color: #1a2744; }
+  .header { background: #14243f; color: white; padding: 0 2.5rem; height: 60px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
+  .nav-link { color: rgba(255,255,255,0.7); padding: 6px 12px; border-radius: 8px; cursor: pointer; }
+  .nav-link.active, .nav-link:hover { color: white; background: rgba(255,255,255,0.1); }
+  .page { display: none; }
+  .page.active { display: block; }
+  .form-card, .tracker-card { background: white; border-radius: 14px; padding: 2rem; border: 1px solid #ddd; }
+  .submit-btn { background: #1D9E75; color: white; border: none; padding: 12px 28px; border-radius: 8px; font-weight: 600; cursor: pointer; }
+  .success-banner { display: none; background: #E1F5EE; padding: 1rem; border-radius: 12px; margin: 1rem 0; }
+  .success-banner.show { display: block; }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <div onclick="showPage('home')" style="display:flex;align-items:center;gap:10px;cursor:pointer">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:3px;width:26px;height:26px">
+      <span style="background:#1D9E75;border-radius:3px"></span>
+      <span style="background:#378ADD;border-radius:3px"></span>
+      <span style="background:#BA7517;border-radius:3px"></span>
+      <span style="background:#534AB7;border-radius:3px"></span>
+    </div>
+    <span style="font-weight:500">Digify CX Group</span>
+  </div>
+  <nav style="display:flex;gap:8px">
+    <button class="nav-link active" id="nav-home" onclick="showPage('home')">Home</button>
+    <button class="nav-link" id="nav-request" onclick="showPage('request')">Submit Request</button>
+    <button class="nav-link" id="nav-tracker" onclick="showPage('tracker')">Tracker</button>
+  </nav>
+</header>
+
+<!-- SUBMIT REQUEST PAGE -->
+<div class="page active" id="page-request">
+  <div style="background:#14243f;color:white;padding:3rem 2.5rem">
+    <h2>Submit Staff Request</h2>
+    <p>→ Cloudflare Proxy → Linear</p>
+  </div>
+  <div class="section" style="max-width:700px;margin:2rem auto">
+    <div class="success-banner" id="success-banner">
+      <div id="success-text"></div>
+    </div>
+
+    <div class="form-card">
+      <input class="form-input" id="req-name" placeholder="Full Name *" style="margin-bottom:12px">
+      <input class="form-input" id="req-email" placeholder="Email" style="margin-bottom:12px">
+      <select class="form-input" id="req-type" style="margin-bottom:12px">
+        <option value="">Request Type</option>
+        <option>Network Access</option>
+        <option>Application Access</option>
+        <option>Facilities</option>
+        <option>Software Installation</option>
+      </select>
+      <textarea class="form-input" id="req-desc" rows="6" placeholder="Detailed description..."></textarea><br><br>
+      <button class="submit-btn" onclick="submitRequest()">Submit to Linear</button>
+    </div>
+  </div>
+</div>
+
+<!-- TRACKER PAGE -->
+<div class="page" id="page-tracker">
+  <div style="background:#14243f;color:white;padding:2.5rem">
+    <h2>Request Tracker</h2>
+  </div>
+  <div class="section" id="tracker-list" style="max-width:900px;margin:2rem auto"></div>
+</div>
+
+<script>
+// ==================== CONFIG ====================
+const WORKER_URL = "https://digify-cx-linear-proxy.yourname.workers.dev"; // ← Change to your worker URL
+
+// ==================== SUBMIT REQUEST ====================
+async function submitRequest() {
+  const name = document.getElementById('req-name').value.trim();
+  const description = document.getElementById('req-desc').value.trim();
+
+  if (!name || !description) return alert("Name and description are required");
+
+  const payload = {
+    title: `${document.getElementById('req-type').value || 'Request'}: ${description.substring(0, 60)}`,
+    description: `Requester: ${name}\nEmail: ${document.getElementById('req-email').value}\n\n${description}`
+  };
+
+  try {
+    const res = await fetch(`${WORKER_URL}/create-issue`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await res.json();
+
+    if (data.success) {
+      const issue = data.issue;
+      document.getElementById('success-text').innerHTML = `
+        <strong>✅ Request submitted!</strong><br><br>
+        Linear Ticket: <a href="${issue.url}" target="_blank">${issue.identifier}</a>
+      `;
+      document.getElementById('success-banner').classList.add('show');
+
+      // Save to localStorage
+      saveRequest(issue);
+      setTimeout(() => showPage('tracker'), 1500);
+    }
+  } catch (e) {
+    alert("Error: " + e.message);
+  }
+}
+
+// ==================== STATUS SYNC ====================
+async function syncIssueStatus(linearId) {
+  try {
+    const res = await fetch(`${WORKER_URL}/issue/${linearId}`);
+    const data = await res.json();
+    return data.data?.issue;
+  } catch (e) {
+    console.error("Sync failed", e);
+    return null;
+  }
+}
+
+// ==================== LOCAL STORAGE & RENDER ====================
+function saveRequest(issue) {
+  let requests = JSON.parse(localStorage.getItem('digify_requests')) || [];
+  requests.unshift({
+    id: 'REQ-' + Date.now().toString(36).toUpperCase(),
+    linearId: issue.identifier,
+    linearUrl: issue.url,
+    title: issue.title,
+    status: issue.state?.name || "Triage",
+    createdAt: new Date().toISOString()
+  });
+  localStorage.setItem('digify_requests', JSON.stringify(requests));
+}
+
+function renderTracker() {
+  const container = document.getElementById('tracker-list');
+  const requests = JSON.parse(localStorage.getItem('digify_requests')) || [];
+
+  let html = requests.length === 0 ? `<p>No requests yet.</p>` : '';
+
+  requests.forEach(req => {
+    html += `
+      <div class="tracker-card">
+        <strong>${req.linearId}</strong> — ${req.title}<br>
+        <span style="color:#1D9E75">Status: ${req.status}</span><br>
+        <a href="${req.linearUrl}" target="_blank">View in Linear →</a>
+      </div>`;
+  });
+
+  container.innerHTML = html;
+}
+
+function showPage(page) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('page-' + page).classList.add('active');
+  if (page === 'tracker') renderTracker();
+}
+
+window.showPage = showPage;
+window.submitRequest = submitRequest;
+
+// Auto-sync every 30 seconds when on tracker page
+setInterval(() => {
+  if (document.getElementById('page-tracker').classList.contains('active')) {
+    renderTracker();
+  }
+}, 30000);
+
+renderTracker();
+</script>
+</body>
+</html>
